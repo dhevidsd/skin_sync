@@ -1,0 +1,9 @@
+node_modules/
+.data/
+.env
+*.log
+.DS_Store
+# Course brief: kept locally, not published
+docs/Assignment1_Microservices_Design_and_Development.pdf
+# Personal demo/video notes
+demo-notes/

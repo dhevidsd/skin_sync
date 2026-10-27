@@ -1,0 +1,33 @@
+{
+  "name": "skinsync",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SkinSync - skin-type quiz, product recommendations and ordering, built as microservices",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "install:all": "node scripts/install-all.js",
+    "db:start": "node scripts/db.js start",
+    "db:stop": "node scripts/db.js stop",
+    "db:status": "node scripts/db.js status",
+    "start:all": "node scripts/svc.js start all",
+    "stop:all": "node scripts/svc.js stop all",
+    "status": "node scripts/svc.js status",
+    "start:service": "node scripts/svc.js start",
+    "stop:service": "node scripts/svc.js stop",
+    "restart:service": "node scripts/svc.js restart",
+    "seed": "node scripts/seed.js",
+    "test": "node scripts/test-all.js",
+    "e2e": "node scripts/e2e.js",
+    "challenge1": "node scripts/challenge1-concurrency.js",
+    "challenge2": "node scripts/challenge2-idempotency.js",
+    "challenge3d": "node scripts/challenge3d-events.js",
+    "docs:sync": "node scripts/sync-openapi.js"
+  },
+  "devDependencies": {
+    "amqplib": "^2.2.0",
+    "embedded-postgres": "^18.4.0-beta.17",
+    "pg": "^8.23.1"
+  }
+}
