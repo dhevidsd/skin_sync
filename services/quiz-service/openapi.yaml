@@ -1,0 +1,223 @@
+openapi: 3.0.3
+info:
+  title: SkinSync quiz-service
+  version: 1.0.0
+  description: |
+    Serves the skin-type quiz, scores answers to exactly one skin type (BR2), stores the latest result
+    per user and returns recommendations (BR3) by calling catalog-service over REST.
+servers:
+  - url: http://localhost:3002
+    description: Local development (port comes from PORT)
+tags:
+  - name: Quiz
+  - name: Users
+  - name: Operations
+paths:
+  /health:
+    get:
+      tags: [Operations]
+      summary: Liveness/readiness including database status
+      responses:
+        '200':
+          description: Up
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '503':
+          description: Database down
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /api/v1/quiz/questions:
+    get:
+      tags: [Quiz]
+      summary: List quiz questions and options
+      responses:
+        '200':
+          description: All questions (all must be answered)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Question' }
+                  count: { type: integer }
+  /api/v1/quiz/submissions:
+    post:
+      tags: [Quiz]
+      summary: Submit answers and get the skin type
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Submission' }
+            example:
+              userId: user-42
+              answers:
+                - { questionId: q1, optionId: b }
+                - { questionId: q2, optionId: a }
+                - { questionId: q3, optionId: c }
+                - { questionId: q4, optionId: a }
+                - { questionId: q5, optionId: c }
+      responses:
+        '201':
+          description: Quiz scored and stored
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QuizResult' }
+        '400': { $ref: '#/components/responses/Error' }
+        '422':
+          description: BR2 violation (INCOMPLETE_QUIZ, UNKNOWN_QUESTION, INVALID_OPTION, DUPLICATE_ANSWER)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error:
+                  code: INCOMPLETE_QUIZ
+                  message: Every question must be answered
+                  details: { missing: [q4, q5] }
+                  correlationId: abc-123
+  /api/v1/users/{userId}/skin-profile:
+    get:
+      tags: [Users]
+      summary: Latest quiz result of a user
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: Latest result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QuizResult' }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/v1/users/{userId}/recommendations:
+    get:
+      tags: [Users]
+      summary: In-stock products for the user's skin type (BR3)
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/CorrelationId'
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 5 }
+      responses:
+        '200':
+          description: Recommendations (exact skin-type matches first, then "all")
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  userId: { type: string }
+                  skinType: { type: string }
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Product' }
+                  count: { type: integer }
+        '400': { $ref: '#/components/responses/Error' }
+        '404':
+          description: SKIN_PROFILE_NOT_FOUND (user has not taken the quiz)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+        '503':
+          description: DEPENDENCY_UNAVAILABLE (catalog-service down or timed out)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+components:
+  parameters:
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      schema: { type: string, maxLength: 100 }
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema: { type: string, example: user-42 }
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, correlationId]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: { nullable: true }
+            correlationId: { type: string }
+    Health:
+      type: object
+      properties:
+        status: { type: string, enum: [UP, DOWN] }
+        service: { type: string }
+        checks:
+          type: object
+          properties:
+            database: { type: string, enum: [UP, DOWN] }
+    SkinType:
+      type: string
+      enum: [oily, dry, combination, normal, sensitive]
+    Question:
+      type: object
+      properties:
+        id: { type: string, example: q1 }
+        text: { type: string }
+        options:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, example: a }
+              text: { type: string }
+    Submission:
+      type: object
+      required: [userId, answers]
+      properties:
+        userId: { type: string }
+        answers:
+          type: array
+          items:
+            type: object
+            required: [questionId, optionId]
+            properties:
+              questionId: { type: string }
+              optionId: { type: string }
+    QuizResult:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        userId: { type: string }
+        skinType: { $ref: '#/components/schemas/SkinType' }
+        scores:
+          type: object
+          additionalProperties: { type: integer }
+          example: { oily: 8, dry: 0, combination: 0, normal: 1, sensitive: 0 }
+        answers: { type: array, items: { type: object } }
+        createdAt: { type: string, format: date-time }
+    Product:
+      type: object
+      description: Product as returned by catalog-service
+      properties:
+        id: { type: string }
+        name: { type: string }
+        brand: { type: string }
+        category: { type: string }
+        priceCents: { type: integer }
+        skinTypes: { type: array, items: { type: string } }
+        stock: { type: integer }
