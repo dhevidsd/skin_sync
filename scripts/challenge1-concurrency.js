@@ -57,14 +57,15 @@ async function partA() {
   const [product] = await query(DB_URLS.catalog, 'SELECT id, stock, updated_at FROM products WHERE id = $1', [productId]);
   ev.log('catalog_db.products:');
   ev.table([product]);
+  const orderIds = results.map((r) => r.body?.id || r.body?.error?.details?.orderId).filter(Boolean);
   const reserved = await query(
     DB_URLS.catalog,
     `SELECT r.status, count(*)::int AS reservations, coalesce(sum(ri.quantity), 0)::int AS units
      FROM reservations r JOIN reservation_items ri ON ri.order_id = r.order_id
-     WHERE ri.product_id = $1 GROUP BY r.status`,
-    [productId],
+     WHERE ri.product_id = $1 AND r.order_id = ANY($2) GROUP BY r.status`,
+    [productId, orderIds],
   );
-  ev.log('catalog_db.reservations for this product:');
+  ev.log('catalog_db.reservations for this run:');
   ev.table(reserved);
   const orders = await query(
     DB_URLS.order,
