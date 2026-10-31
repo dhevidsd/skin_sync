@@ -46,7 +46,7 @@ Business rules are pure functions in `rules.js` so they can be unit-tested witho
 
 ## Prerequisites
 
-- **Node.js 20+** and npm (developed on Node 20.17, WSL Ubuntu). No other runtime needed.
+- **Node.js 20+** and npm (developed on Node 20.17, also tested on Node 24.22 LTS; WSL Ubuntu). No other runtime needed.
 - **PostgreSQL**: none to install. `npm run db:start` runs a local PostgreSQL from the `embedded-postgres`
   npm package (dev only). Any PostgreSQL works: just point each service's `DATABASE_URL` at it.
 - **RabbitMQ** on `amqp://guest:guest@localhost:5672` (only needed for the notification flow and Challenge 3D).

@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test tests/"
+    "test": "node --test"
   },
   "dependencies": {
     "amqplib": "^2.2.0",

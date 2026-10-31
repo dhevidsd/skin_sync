@@ -13,8 +13,8 @@ const file = path.join(outDir, `unit-tests-${new Date().toISOString().replace(/:
 let report = `$ npm test   (${new Date().toISOString()})\n`;
 const summary = [];
 for (const name of services) {
-  // Output is not a TTY, so node:test prints TAP: every test name (BR1..BR6) with ok / not ok.
-  const result = spawnSync(npm, ['test', '--silent'], {
+  // TAP lists every test name (BR1..BR6) with ok / not ok; Node 22+ defaults to another format, so ask for TAP.
+  const result = spawnSync(npm, ['test', '--silent', '--', '--test-reporter=tap'], {
     cwd: path.join(ROOT, 'services', name),
     encoding: 'utf8',
     shell: process.platform === 'win32',
