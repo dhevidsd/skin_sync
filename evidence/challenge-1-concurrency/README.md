@@ -25,7 +25,7 @@ defence. Multi-item orders lock products in productId order, which prevents dead
 
 | File | Section | Proves |
 |---|---|---|
-| [RUN_FILE](RUN_FILE) | Part A table | 25 orders fired in parallel through order-service: 5 x `201 CONFIRMED`, 20 x `409 OUT_OF_STOCK` |
+| [run-2026-10-31T05-31-18.txt](run-2026-10-31T05-31-18.txt) | Part A table | 25 orders fired in parallel through order-service: 5 x `201 CONFIRMED`, 20 x `409 OUT_OF_STOCK` |
 | same | Part A "Final database state" | `catalog_db.products.stock = 0` (never negative), 5 RESERVED reservations for 5 units, `order_db`: 5 CONFIRMED + 20 FAILED (OUT_OF_STOCK) |
 | same | Part B | **Failure case / counter-example:** the naive check-then-update endpoint accepted 25 reservations for 5 units; the final stock was 4 (lost updates, oversold by 20) |
 | same | "Why a plain check-then-update fails" | explanation of the race |

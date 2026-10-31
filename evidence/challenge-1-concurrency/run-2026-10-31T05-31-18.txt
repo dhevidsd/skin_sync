@@ -1,0 +1,95 @@
+[2026-10-31T05:31:18.132Z] $ node scripts/challenge1-concurrency.js
+[2026-10-31T05:31:18.182Z] 
+==== Part A: atomic reservation, stock = 5, 25 parallel orders ====
+[2026-10-31T05:31:18.415Z] Setup: product p-c1-atomic stock=5; 25 users each have 1 unit in their cart.
+[2026-10-31T05:31:18.415Z] Firing 25 POST /api/v1/orders at the same time (Promise.all)...
+[2026-10-31T05:31:18.806Z] All 25 responses received in 391 ms
+[2026-10-31T05:31:18.806Z] 
+user              | http | result       | ms 
+------------------+------+--------------+----
+c1-1031053118-u01 | 201  | CONFIRMED    | 374
+c1-1031053118-u02 | 201  | CONFIRMED    | 390
+c1-1031053118-u03 | 201  | CONFIRMED    | 352
+c1-1031053118-u04 | 409  | OUT_OF_STOCK | 136
+c1-1031053118-u05 | 409  | OUT_OF_STOCK | 151
+c1-1031053118-u06 | 201  | CONFIRMED    | 382
+c1-1031053118-u07 | 409  | OUT_OF_STOCK | 155
+c1-1031053118-u08 | 409  | OUT_OF_STOCK | 152
+c1-1031053118-u09 | 409  | OUT_OF_STOCK | 173
+c1-1031053118-u10 | 201  | CONFIRMED    | 338
+c1-1031053118-u11 | 409  | OUT_OF_STOCK | 158
+c1-1031053118-u12 | 409  | OUT_OF_STOCK | 168
+c1-1031053118-u13 | 409  | OUT_OF_STOCK | 179
+c1-1031053118-u14 | 409  | OUT_OF_STOCK | 170
+c1-1031053118-u15 | 409  | OUT_OF_STOCK | 180
+c1-1031053118-u16 | 409  | OUT_OF_STOCK | 172
+c1-1031053118-u17 | 409  | OUT_OF_STOCK | 174
+c1-1031053118-u18 | 409  | OUT_OF_STOCK | 144
+c1-1031053118-u19 | 409  | OUT_OF_STOCK | 146
+c1-1031053118-u20 | 409  | OUT_OF_STOCK | 181
+c1-1031053118-u21 | 409  | OUT_OF_STOCK | 181
+c1-1031053118-u22 | 409  | OUT_OF_STOCK | 151
+c1-1031053118-u23 | 409  | OUT_OF_STOCK | 157
+c1-1031053118-u24 | 409  | OUT_OF_STOCK | 175
+c1-1031053118-u25 | 409  | OUT_OF_STOCK | 165
+[2026-10-31T05:31:18.807Z] 
+Succeeded: 5   Rejected with 409 OUT_OF_STOCK: 20   Other: 0
+[2026-10-31T05:31:18.807Z] Sample rejection body: {"error":{"code":"OUT_OF_STOCK","message":"Not enough stock for product p-c1-atomic","details":{"productId":"p-c1-atomic","requested":1,"available":0,"orderId":"f2dcce0b-26f3-49d9-ad3e-3f7fd4507796"},"correlationId":"c1-1031053118-req-4"}}
+[2026-10-31T05:31:18.807Z] 
+==== Final database state ====
+[2026-10-31T05:31:18.827Z] catalog_db.products:
+[2026-10-31T05:31:18.827Z] 
+id          | stock | updated_at              
+------------+-------+-------------------------
+p-c1-atomic | 0     | 2026-10-31T05:31:18.494Z
+[2026-10-31T05:31:18.841Z] catalog_db.reservations for this run:
+[2026-10-31T05:31:18.842Z] 
+status   | reservations | units
+---------+--------------+------
+RESERVED | 5            | 5    
+[2026-10-31T05:31:18.852Z] order_db.orders for this run:
+[2026-10-31T05:31:18.852Z] 
+status    | failure_reason | orders
+----------+----------------+-------
+CONFIRMED | NULL           | 5     
+FAILED    | OUT_OF_STOCK   | 20    
+[2026-10-31T05:31:18.853Z] 
+[2026-10-31T05:31:18.853Z] PASS  exactly 5 orders succeeded (got 5)
+[2026-10-31T05:31:18.853Z] PASS  the other 20 were rejected with 409 OUT_OF_STOCK (got 20)
+[2026-10-31T05:31:18.853Z] PASS  stock is exactly 0, never negative (got 0)
+[2026-10-31T05:31:18.853Z] PASS  reserved units in catalog_db = 5 (got 5)
+[2026-10-31T05:31:18.853Z] PASS  CONFIRMED orders in order_db = 5 (got 5)
+[2026-10-31T05:31:18.853Z] 
+==== Part B: naive check-then-update (counter-example), stock = 5, 25 parallel requests ====
+[2026-10-31T05:31:18.971Z] 
+http | stockRead | stockWritten
+-----+-----------+-------------
+200  | 5         | 4           
+200  | 5         | 4           
+200  | 5         | 4           
+200  | 5         | 4           
+200  | 5         | 4           
+200  | 5         | 4           
+200  | 5         | 4           
+200  | 5         | 4           
+200  | 5         | 4           
+200  | 5         | 4           
+[2026-10-31T05:31:18.971Z] ... 15 more successful responses
+[2026-10-31T05:31:18.984Z] Naive endpoint accepted 25 reservations for 5 units. Final stock in DB: 4.
+[2026-10-31T05:31:18.984Z] Units handed out: 25; units actually removed from stock: 1; oversold by 20.
+[2026-10-31T05:31:18.984Z] PASS  naive check-then-update oversells (25 accepted > 5 available): this is the bug the atomic UPDATE prevents
+[2026-10-31T05:31:18.984Z] 
+==== Why a plain check-then-update fails ====
+[2026-10-31T05:31:18.984Z] Naive: SELECT stock -> if stock >= qty (in Node.js) -> UPDATE products SET stock = <value computed in Node.js>.
+Two requests can both read stock = 1 before either writes. Both pass the check and both write 0,
+so two units are sold while only one existed (lost update). With more parallel requests it gets worse.
+
+SkinSync instead runs, inside a transaction:
+  UPDATE products SET stock = stock - $qty WHERE id = $id AND stock >= $qty RETURNING ...
+The condition and the write are one atomic statement. PostgreSQL takes a row lock, so a concurrent
+UPDATE waits, then re-evaluates "stock >= $qty" against the committed value. When stock runs out the
+UPDATE matches 0 rows and the service answers 409 OUT_OF_STOCK. A CHECK (stock >= 0) constraint is the
+last line of defence. Multi-item orders lock rows in productId order to avoid deadlocks.
+[2026-10-31T05:31:18.984Z] 
+RESULT: 6 passed, 0 failed
+[2026-10-31T05:31:18.984Z] Evidence written to evidence/challenge-1-concurrency/run-2026-10-31T05-31-18.txt
