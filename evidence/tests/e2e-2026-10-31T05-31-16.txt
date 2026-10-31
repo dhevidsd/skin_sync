@@ -1,0 +1,52 @@
+[2026-10-31T05:31:16.130Z] $ node scripts/e2e.js
+[2026-10-31T05:31:16.133Z] 
+==== Health of all services ====
+[2026-10-31T05:31:16.186Z] catalog       {"status":"UP","service":"catalog-service","checks":{"database":"UP"}}
+[2026-10-31T05:31:16.203Z] quiz          {"status":"UP","service":"quiz-service","checks":{"database":"UP"}}
+[2026-10-31T05:31:16.210Z] order         {"status":"UP","service":"order-service","checks":{"database":"UP","broker":"UP","outboxPending":0}}
+[2026-10-31T05:31:16.226Z] payment       {"status":"UP","service":"payment-service","checks":{"database":"UP"}}
+[2026-10-31T05:31:16.241Z] notification  {"status":"UP","service":"notification-service","checks":{"database":"UP","broker":"UP"}}
+[2026-10-31T05:31:16.242Z] 
+==== Happy path for e2e-1031053116-alice ====
+[2026-10-31T05:31:16.246Z] PASS  GET quiz questions -> 200, 5 questions
+[2026-10-31T05:31:16.272Z] Quiz result: 201 {"skinType":"oily","scores":{"dry":0,"oily":8,"normal":2,"sensitive":0,"combination":0}}
+[2026-10-31T05:31:16.272Z] PASS  BR2: answers scored to exactly one skin type (oily)
+[2026-10-31T05:31:16.321Z] 
+id    | name                                | skinTypes        | stock | priceCents
+------+-------------------------------------+------------------+-------+-----------
+p-013 | Kaolin Clay Purifying Mask          | oily             | 15    | 1599      
+p-012 | Matte Finish Sunscreen SPF 50       | oily,combination | 25    | 1999      
+p-004 | Niacinamide 10% + Zinc Serum        | oily,combination | 30    | 1899      
+p-008 | Oil-Free Gel Moisturizer            | oily             | 40    | 1699      
+p-002 | Salicylic Acid Oil-Control Cleanser | oily,combination | 40    | 1499      
+[2026-10-31T05:31:16.321Z] PASS  BR3: recommendations are in stock and tagged oily or all
+[2026-10-31T05:31:16.321Z] Adding p-013 x2 and p-012 x1 to the cart
+[2026-10-31T05:31:16.391Z] Cart: {"userId":"e2e-1031053116-alice","items":[{"productId":"p-013","quantity":2,"addedAt":"2026-10-31T05:31:16.370Z"},{"productId":"p-012","quantity":1,"addedAt":"2026-10-31T05:31:16.387Z"}],"totalQuantity":3}
+[2026-10-31T05:31:16.391Z] PASS  cart holds 3 units
+[2026-10-31T05:31:16.396Z] Adding 4 more of the first product: 422 {"code":"CART_QUANTITY_OUT_OF_RANGE","message":"Quantity per item must be between 1 and 5","details":{"quantity":6,"min":1,"max":5},"correlationId":"e2e-1031053116-cart-too-many"}
+[2026-10-31T05:31:16.396Z] PASS  BR4: quantity above 5 per item rejected with 422
+[2026-10-31T05:31:16.690Z] Place order: 201 {"id":"e8db4d26-5b5f-4b06-ac1c-b280660ca276","status":"CONFIRMED","totalCents":5197,"paymentId":"54e811e5-0df2-4a1b-b3c5-8537b5d2ca70"}
+[2026-10-31T05:31:16.690Z] PASS  order placed and CONFIRMED
+[2026-10-31T05:31:16.690Z] PASS  total = 1599 x 2 + 1999 = 5197
+[2026-10-31T05:31:16.696Z] Status history: - -> PENDING, PENDING -> STOCK_RESERVED, STOCK_RESERVED -> PAID, PAID -> CONFIRMED
+[2026-10-31T05:31:16.696Z] PASS  BR5: order went PENDING -> STOCK_RESERVED -> PAID -> CONFIRMED
+[2026-10-31T05:31:16.701Z] PASS  BR1: catalog stock reduced by exactly the ordered quantities
+[2026-10-31T05:31:16.705Z] PASS  cart emptied after confirmation
+[2026-10-31T05:31:16.709Z] PASS  BR6: exactly one SUCCEEDED payment for the order
+[2026-10-31T05:31:17.724Z] Notification: {"recipient":"e2e-1031053116-alice@example.com","subject":"SkinSync order e8db4d26 confirmed"}
+[2026-10-31T05:31:17.724Z] PASS  order.confirmed event delivered via RabbitMQ and notification stored
+[2026-10-31T05:31:17.729Z] Cancel the CONFIRMED order: 409 {"code":"ILLEGAL_STATE_TRANSITION","message":"Order cannot move from CONFIRMED to CANCELLED","details":{"from":"CONFIRMED","to":"CANCELLED","allowed":[]},"correlationId":"e2e-1031053116-cancel"}
+[2026-10-31T05:31:17.729Z] PASS  BR5: illegal transition CONFIRMED -> CANCELLED rejected with 409
+[2026-10-31T05:31:17.737Z] PASS  BR4: order with an empty cart rejected with 422
+[2026-10-31T05:31:17.737Z] 
+==== Failure path for e2e-1031053116-bob: payment declined -> order FAILED, stock released ====
+[2026-10-31T05:31:17.993Z] Place order with forced payment failure: 402 {"code":"PAYMENT_DECLINED","message":"Payment for order defb72aa-2655-4937-8c13-5702b641a41b was declined","details":{"paymentId":"11d748a0-3682-4e17-ab54-e65794bccd7c","orderId":"defb72aa-2655-4937-8c13-5702b641a41b","reason":"FORCED_FAILURE","attempts":1},"correlationId":"e2e-1031053116-declined"}
+[2026-10-31T05:31:17.993Z] PASS  client gets 402 PAYMENT_DECLINED
+[2026-10-31T05:31:17.997Z] Status history: - -> PENDING, PENDING -> STOCK_RESERVED, STOCK_RESERVED -> FAILED (PAYMENT_DECLINED)
+[2026-10-31T05:31:17.997Z] PASS  order is FAILED with reason PAYMENT_DECLINED
+[2026-10-31T05:31:18.002Z] Stock of p-004: before=30, after=30; reservation status=RELEASED
+[2026-10-31T05:31:18.002Z] PASS  compensation: reserved stock released back to the catalog
+[2026-10-31T05:31:18.004Z] PASS  cart is kept so the user can retry with a new Idempotency-Key
+[2026-10-31T05:31:18.004Z] 
+RESULT: 18 passed, 0 failed
+[2026-10-31T05:31:18.004Z] Evidence written to evidence/tests/e2e-2026-10-31T05-31-16.txt

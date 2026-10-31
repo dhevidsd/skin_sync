@@ -1,0 +1,52 @@
+$ npm test   (2026-10-31T05:31:14.870Z)
+
+== catalog-service (pass 4, fail 0)
+ok 1 - BR1: reservation allowed only when stock covers the quantity
+ok 2 - BR1: zero, negative and fractional quantities are never reservable
+ok 3 - BR1: out-of-stock error is a 409 with requested and available units
+ok 4 - BR1: duplicate lines are merged so the total quantity is checked against stock
+
+== notification-service (pass 3, fail 0)
+ok 1 - order.confirmed event becomes one email for the ordering user
+ok 2 - the same event always produces the same email (safe to rebuild on redelivery)
+ok 3 - malformed events are rejected so they are not retried forever
+
+== order-service (pass 12, fail 0)
+ok 1 - BR4: cart quantity per item must be between 1 and 5
+ok 2 - BR4: adding to an existing line cannot push it above 5
+ok 3 - BR4: an order cannot be placed with an empty cart
+ok 4 - BR5: the happy path PENDING -> STOCK_RESERVED -> PAID -> CONFIRMED is allowed
+ok 5 - BR5: failure and cancellation are only allowed before payment
+ok 6 - BR5: illegal transitions are rejected with 409 (skipping steps, leaving final states)
+ok 7 - BR5: CONFIRMED, FAILED and CANCELLED are final states
+ok 8 - BR6: request fingerprint is stable and ignores key order
+ok 9 - BR6: a repeated key with the same request replays, or waits while the first is running
+ok 10 - BR6: a repeated key with a different payload is rejected with 422
+ok 11 - order total is the sum of unit price x quantity
+ok 12 - retry backoff grows exponentially and stays within its jitter band
+
+== payment-service (pass 6, fail 0)
+ok 1 - BR6: repeated charge with identical details is accepted (caller gets the original payment)
+ok 2 - BR6: same orderId with a different amount is rejected with 422
+ok 3 - BR6: same orderId for a different user is rejected with 422
+ok 4 - mock gateway: forced outcomes override the random failure rate
+ok 5 - mock gateway: failure rate is applied when no outcome is forced
+ok 6 - mock gateway: simulation header parsing
+
+== quiz-service (pass 9, fail 0)
+ok 1 - BR2: clearly oily answers map to oily
+ok 2 - BR2: clearly dry answers map to dry
+ok 3 - BR2: reactive answers map to sensitive
+ok 4 - BR2: same answers always give the same single skin type (deterministic)
+ok 5 - BR2: ties are broken by a fixed priority, never by input order
+ok 6 - BR2: every question must be answered
+ok 7 - BR2: unknown questions, invalid options and duplicate answers are rejected
+ok 8 - BR3: only in-stock products tagged for the skin type or "all" are recommended
+ok 9 - BR3: exact skin-type matches come before "all" products and limit is applied
+
+SUMMARY
+catalog-service        pass   4  fail 0
+notification-service   pass   3  fail 0
+order-service          pass  12  fail 0
+payment-service        pass   6  fail 0
+quiz-service           pass   9  fail 0
