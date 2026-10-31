@@ -19,10 +19,9 @@ Authentication, UI and real payment integration are out of scope: callers pass a
 
 | Member | BITS ID | Owns |
 |---|---|---|
-| DHEVI SHREE D S (lead) | 2025TM93120 | order-service, root tooling, Challenge 2, architecture docs |
+| DHEVI SHREE D S (lead) | 2025TM93120 | order-service, notification-service, root tooling, Challenges 2 and 3D, architecture and OpenAPI docs |
 | RUCHI GUPTA | `<BITS ID>` | catalog-service, seed data, Challenge 1 |
 | MODI FREYA MANISH | `<BITS ID>` | quiz-service, payment-service, end-to-end test |
-| SURAJ KUMAR | `<BITS ID>` | notification-service, Challenge 3D, OpenAPI docs |
 
 More detail:
 - [docs/architecture.md](docs/architecture.md): component diagram, sequence diagrams (happy and failure path), state machine, ER diagrams, data ownership
