@@ -1,0 +1,172 @@
+openapi: 3.0.3
+info:
+  title: SkinSync payment-service (mock gateway)
+  version: 1.0.0
+  description: |
+    Mock payment gateway. Latency and decline rate come from PAYMENT_LATENCY_MS and PAYMENT_FAILURE_RATE.
+    Charges are idempotent per orderId (BR6): a UNIQUE constraint on order_id guarantees at most one
+    payment per order, even when duplicate requests arrive at the same moment.
+servers:
+  - url: http://localhost:3004
+    description: Local development (port comes from PORT)
+tags:
+  - name: Payments
+  - name: Operations
+paths:
+  /health:
+    get:
+      tags: [Operations]
+      summary: Liveness/readiness including database status
+      responses:
+        '200':
+          description: Up
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '503':
+          description: Database down
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /api/v1/payments:
+    post:
+      tags: [Payments]
+      summary: Charge an order (idempotent per orderId)
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+        - name: X-Payment-Simulate
+          in: header
+          required: false
+          description: |
+            Demo control (only when ALLOW_SIMULATION_HEADER=true). Comma-separated:
+            `fail` (decline), `success` (ignore failure rate), `error` (503, nothing recorded), `delay=<ms>`.
+          schema: { type: string, example: 'delay=3000,fail' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChargeRequest' }
+            example: { orderId: 6f1c2a9e-0d7b-4a51-9a51-2f7f3c1d9b10, userId: user-42, amountCents: 3598 }
+      responses:
+        '201':
+          description: Charge succeeded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Payment' }
+        '200':
+          description: Order was already charged successfully; original payment returned (header Idempotent-Replayed=true)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Payment' }
+        '400': { $ref: '#/components/responses/Error' }
+        '402':
+          description: PAYMENT_DECLINED (also returned when replaying a declined charge)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error:
+                  code: PAYMENT_DECLINED
+                  message: Payment for order 6f1c2a9e was declined
+                  details: { paymentId: 0e0c..., orderId: 6f1c2a9e, reason: FORCED_FAILURE }
+                  correlationId: abc-123
+        '422':
+          description: IDEMPOTENCY_MISMATCH, the order was already charged with a different amount or user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          description: GATEWAY_UNAVAILABLE (simulated transient error, safe to retry)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    get:
+      tags: [Payments]
+      summary: Find the payment of an order
+      parameters:
+        - name: orderId
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Zero or one payment
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Payment' }
+                  count: { type: integer }
+        '400': { $ref: '#/components/responses/Error' }
+  /api/v1/payments/{paymentId}:
+    get:
+      tags: [Payments]
+      summary: Get a payment
+      parameters:
+        - name: paymentId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: The payment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Payment' }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+components:
+  parameters:
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      schema: { type: string, maxLength: 100 }
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, correlationId]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: { nullable: true }
+            correlationId: { type: string }
+    Health:
+      type: object
+      properties:
+        status: { type: string, enum: [UP, DOWN] }
+        service: { type: string }
+        checks:
+          type: object
+          properties:
+            database: { type: string, enum: [UP, DOWN] }
+    ChargeRequest:
+      type: object
+      required: [orderId, userId, amountCents]
+      properties:
+        orderId: { type: string }
+        userId: { type: string }
+        amountCents: { type: integer, minimum: 1 }
+    Payment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        orderId: { type: string }
+        userId: { type: string }
+        amountCents: { type: integer }
+        status: { type: string, enum: [SUCCEEDED, DECLINED] }
+        failureReason: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }

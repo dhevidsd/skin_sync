@@ -1,0 +1,117 @@
+openapi: 3.0.3
+info:
+  title: SkinSync notification-service (mock email)
+  version: 1.0.0
+  description: |
+    Consumes `order.confirmed` events from RabbitMQ (durable queue `notification.order-confirmed`,
+    bound to topic exchange `skinsync.events`) with manual acknowledgements. Each message carries a
+    messageId; a processed_messages table with a PRIMARY KEY on messageId makes duplicate deliveries a
+    no-op. Sent (mock) notifications can be listed over HTTP.
+
+    Message contract (AMQP properties: messageId, contentType=application/json, persistent,
+    headers.x-correlation-id):
+    ```json
+    { "eventType": "order.confirmed", "occurredAt": "2026-01-01T10:00:00.000Z",
+      "data": { "orderId": "...", "userId": "user-42", "totalCents": 3598, "paymentId": "...",
+                "items": [{ "productId": "p-001", "name": "...", "quantity": 2, "unitPriceCents": 1799 }] } }
+    ```
+servers:
+  - url: http://localhost:3005
+    description: Local development (port comes from PORT)
+tags:
+  - name: Notifications
+  - name: Operations
+paths:
+  /health:
+    get:
+      tags: [Operations]
+      summary: Database and broker status
+      responses:
+        '200':
+          description: UP, or DEGRADED when the broker is down (messages wait in the durable queue)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '503':
+          description: Database down
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /api/v1/notifications:
+    get:
+      tags: [Notifications]
+      summary: List sent notifications (newest first)
+      parameters:
+        - { name: userId, in: query, schema: { type: string } }
+        - { name: orderId, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: Notifications
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Notification' }
+                  count: { type: integer }
+        '400': { $ref: '#/components/responses/Error' }
+  /api/v1/notifications/{id}:
+    get:
+      tags: [Notifications]
+      summary: Get one notification
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The notification
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Notification' }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+components:
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, correlationId]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: { nullable: true }
+            correlationId: { type: string }
+    Health:
+      type: object
+      properties:
+        status: { type: string, enum: [UP, DEGRADED, DOWN] }
+        service: { type: string }
+        checks:
+          type: object
+          properties:
+            database: { type: string, enum: [UP, DOWN] }
+            broker: { type: string, enum: [UP, DOWN] }
+    Notification:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        messageId: { type: string, description: AMQP messageId (= order-service outbox id) }
+        orderId: { type: string }
+        userId: { type: string }
+        channel: { type: string, enum: [EMAIL, SMS] }
+        recipient: { type: string }
+        subject: { type: string }
+        body: { type: string }
+        status: { type: string, enum: [SENT] }
+        createdAt: { type: string, format: date-time }

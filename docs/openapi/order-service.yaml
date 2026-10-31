@@ -1,0 +1,345 @@
+openapi: 3.0.3
+info:
+  title: SkinSync order-service
+  version: 1.0.0
+  description: |
+    Cart management and order placement. POST /api/v1/orders orchestrates the main transaction:
+    validate cart (BR4) -> reserve stock in catalog-service (BR1) -> charge payment-service (BR6)
+    -> confirm (BR5) -> write order.confirmed to the transactional outbox, which a relay publishes
+    to RabbitMQ (exchange `skinsync.events`, routing key `order.confirmed`).
+
+    Order states: PENDING -> STOCK_RESERVED -> PAID -> CONFIRMED, plus FAILED (from PENDING or
+    STOCK_RESERVED) and CANCELLED (from PENDING or STOCK_RESERVED). Any other transition is 409.
+servers:
+  - url: http://localhost:3003
+    description: Local development (port comes from PORT)
+tags:
+  - name: Cart
+  - name: Orders
+  - name: Operations
+paths:
+  /health:
+    get:
+      tags: [Operations]
+      summary: Database, broker and outbox status
+      responses:
+        '200':
+          description: UP, or DEGRADED when the broker is down (orders still work; events wait in the outbox)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '503':
+          description: Database down
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /api/v1/carts/{userId}:
+    get:
+      tags: [Cart]
+      summary: View a cart
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: The cart (empty if nothing added)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cart' }
+  /api/v1/carts/{userId}/items:
+    post:
+      tags: [Cart]
+      summary: Add a product (adds to the existing quantity)
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [productId, quantity]
+              properties:
+                productId: { type: string, example: p-001 }
+                quantity: { type: integer, minimum: 1, maximum: 5, example: 1 }
+      responses:
+        '201':
+          description: Updated cart
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cart' }
+        '400': { $ref: '#/components/responses/Error' }
+        '422':
+          description: CART_QUANTITY_OUT_OF_RANGE (BR4) or UNKNOWN_PRODUCT
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error:
+                  code: CART_QUANTITY_OUT_OF_RANGE
+                  message: Quantity per item must be between 1 and 5
+                  details: { quantity: 6, min: 1, max: 5 }
+                  correlationId: abc-123
+        '503': { $ref: '#/components/responses/Error' }
+  /api/v1/carts/{userId}/items/{productId}:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+      - name: productId
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      tags: [Cart]
+      summary: Set the quantity of a cart line
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quantity]
+              properties:
+                quantity: { type: integer, minimum: 1, maximum: 5 }
+      responses:
+        '200':
+          description: Updated cart
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cart' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Cart]
+      summary: Remove a product from the cart
+      responses:
+        '204': { description: Removed }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/v1/orders:
+    post:
+      tags: [Orders]
+      summary: Place an order from the user's cart (idempotent)
+      description: |
+        Requires `Idempotency-Key`. The key and a SHA-256 fingerprint of the request are stored with the
+        final response. Repeats (sequential or simultaneous) get the stored response with
+        `Idempotent-Replayed: true`. The same key with a different body is rejected with 422.
+        The final outcome of a key is stored even if it was a failure, so a retry never creates a second order.
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 8, maxLength: 100, example: 'order-user42-7f3c1d9b' }
+        - name: X-Payment-Simulate
+          in: header
+          required: false
+          description: Demo only. Forwarded to payment-service (fail | success | error | delay=<ms>).
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId]
+              properties:
+                userId: { type: string, example: user-42 }
+      responses:
+        '201':
+          description: Order CONFIRMED (also replayed with the same status for repeats)
+          headers:
+            Idempotent-Replayed:
+              schema: { type: string, enum: ['true', 'false'] }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '400':
+          description: VALIDATION_ERROR or IDEMPOTENCY_KEY_REQUIRED
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '402':
+          description: PAYMENT_DECLINED. The order is FAILED and its stock was released. details.orderId is set.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: OUT_OF_STOCK (BR1, order FAILED), REQUEST_IN_PROGRESS, or ILLEGAL_STATE_TRANSITION
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error:
+                  code: OUT_OF_STOCK
+                  message: Not enough stock for product p-001
+                  details: { productId: p-001, requested: 1, available: 0, orderId: 6f1c2a9e-0d7b-4a51-9a51-2f7f3c1d9b10 }
+                  correlationId: abc-123
+        '422':
+          description: EMPTY_CART (BR4) or IDEMPOTENCY_KEY_REUSED (same key, different body)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          description: CATALOG or PAYMENT unavailable after retries (order FAILED, stock released)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    get:
+      tags: [Orders]
+      summary: List a user's orders (latest 50)
+      parameters:
+        - name: userId
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Order summaries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/OrderSummary' }
+                  count: { type: integer }
+        '400': { $ref: '#/components/responses/Error' }
+  /api/v1/orders/{orderId}:
+    get:
+      tags: [Orders]
+      summary: Get an order with items and status history
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: The order
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/v1/orders/{orderId}/cancel:
+    post:
+      tags: [Orders]
+      summary: Cancel an order that has not been paid (releases reserved stock)
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: Order CANCELLED
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409':
+          description: ILLEGAL_STATE_TRANSITION (BR5), e.g. cancelling a CONFIRMED order
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error:
+                  code: ILLEGAL_STATE_TRANSITION
+                  message: Order cannot move from CONFIRMED to CANCELLED
+                  details: { from: CONFIRMED, to: CANCELLED, allowed: [] }
+                  correlationId: abc-123
+components:
+  parameters:
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      schema: { type: string, maxLength: 100 }
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema: { type: string, example: user-42 }
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, correlationId]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: { nullable: true }
+            correlationId: { type: string }
+    Health:
+      type: object
+      properties:
+        status: { type: string, enum: [UP, DEGRADED, DOWN] }
+        service: { type: string }
+        checks:
+          type: object
+          properties:
+            database: { type: string, enum: [UP, DOWN] }
+            broker: { type: string, enum: [UP, DOWN] }
+            outboxPending: { type: integer, nullable: true }
+    Cart:
+      type: object
+      properties:
+        userId: { type: string }
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              productId: { type: string }
+              quantity: { type: integer }
+              addedAt: { type: string, format: date-time }
+        totalQuantity: { type: integer }
+    OrderStatus:
+      type: string
+      enum: [PENDING, STOCK_RESERVED, PAID, CONFIRMED, CANCELLED, FAILED]
+    OrderSummary:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        userId: { type: string }
+        status: { $ref: '#/components/schemas/OrderStatus' }
+        totalCents: { type: integer, nullable: true }
+        failureReason: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+    Order:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        userId: { type: string }
+        status: { $ref: '#/components/schemas/OrderStatus' }
+        totalCents: { type: integer, nullable: true }
+        paymentId: { type: string, nullable: true }
+        failureReason: { type: string, nullable: true }
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              productId: { type: string }
+              productName: { type: string, nullable: true }
+              unitPriceCents: { type: integer, nullable: true }
+              quantity: { type: integer }
+        history:
+          type: array
+          items:
+            type: object
+            properties:
+              from: { type: string, nullable: true }
+              to: { type: string }
+              reason: { type: string, nullable: true }
+              at: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }

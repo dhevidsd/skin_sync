@@ -1,0 +1,310 @@
+openapi: 3.0.3
+info:
+  title: SkinSync catalog-service
+  version: 1.0.0
+  description: |
+    Owns products, skin-type tags, prices and stock (the contended resource).
+    Stock is reserved per order with an atomic conditional UPDATE (BR1, Challenge 1).
+    Reserve and release are idempotent per orderId, so callers can safely retry.
+servers:
+  - url: http://localhost:3001
+    description: Local development (port comes from PORT)
+tags:
+  - name: Products
+  - name: Reservations
+  - name: Demo
+  - name: Operations
+paths:
+  /health:
+    get:
+      tags: [Operations]
+      summary: Liveness/readiness including database status
+      responses:
+        '200':
+          description: Service and database are up
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '503':
+          description: Database is down
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /api/v1/products:
+    get:
+      tags: [Products]
+      summary: List products, optionally filtered
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+        - name: skinType
+          in: query
+          description: Returns products tagged with this skin type OR tagged "all"
+          schema: { $ref: '#/components/schemas/SkinTag' }
+        - name: inStock
+          in: query
+          schema: { type: string, enum: ['true', 'false'] }
+        - name: category
+          in: query
+          schema: { type: string, example: serum }
+      responses:
+        '200':
+          description: Matching products
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Product' }
+                  count: { type: integer }
+        '400': { $ref: '#/components/responses/ValidationError' }
+  /api/v1/products/{productId}:
+    parameters:
+      - $ref: '#/components/parameters/ProductId'
+      - $ref: '#/components/parameters/CorrelationId'
+    get:
+      tags: [Products]
+      summary: Get one product
+      responses:
+        '200':
+          description: The product
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Product' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Products]
+      summary: Create or replace a product (seeding and restocking)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProductInput' }
+      responses:
+        '200':
+          description: Product replaced
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Product' }
+        '201':
+          description: Product created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Product' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+  /api/v1/reservations:
+    post:
+      tags: [Reservations]
+      summary: Reserve stock for an order (all items or none)
+      description: |
+        Each item is reserved with `UPDATE products SET stock = stock - q WHERE id = ? AND stock >= q`
+        inside one transaction. If any item is short, nothing is reserved (409 OUT_OF_STOCK).
+        Repeating the call with the same orderId returns the existing reservation with 200.
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReservationRequest' }
+            example:
+              orderId: 6f1c2a9e-0d7b-4a51-9a51-2f7f3c1d9b10
+              items:
+                - { productId: p-001, quantity: 2 }
+      responses:
+        '201':
+          description: Stock reserved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Reservation' }
+        '200':
+          description: Reservation for this orderId already existed (idempotent repeat)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Reservation' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: OUT_OF_STOCK (BR1) or RESERVATION_RELEASED
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error:
+                  code: OUT_OF_STOCK
+                  message: Not enough stock for product p-001
+                  details: { productId: p-001, requested: 2, available: 1 }
+                  correlationId: 1b2c3d4e
+  /api/v1/reservations/{orderId}:
+    get:
+      tags: [Reservations]
+      summary: Get the reservation of an order
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+        - $ref: '#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: The reservation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Reservation' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/reservations/{orderId}/release:
+    post:
+      tags: [Reservations]
+      summary: Release a reservation and return the units to stock (idempotent)
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+        - $ref: '#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: Reservation is RELEASED (now or previously)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Reservation' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/demo/naive-reservations:
+    post:
+      tags: [Demo]
+      summary: UNSAFE check-then-update reservation (only when ENABLE_NAIVE_DEMO=true)
+      description: Exists only to demonstrate overselling for Challenge 1. Do not use in real flows.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [productId, quantity]
+              properties:
+                productId: { type: string }
+                quantity: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Reserved (possibly incorrectly)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  productId: { type: string }
+                  quantity: { type: integer }
+                  stockRead: { type: integer }
+                  stockWritten: { type: integer }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: OUT_OF_STOCK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+components:
+  parameters:
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      description: Propagated in logs and downstream calls; generated if absent and echoed in the response.
+      schema: { type: string, maxLength: 100 }
+    ProductId:
+      name: productId
+      in: path
+      required: true
+      schema: { type: string, example: p-001 }
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      schema: { type: string }
+  responses:
+    ValidationError:
+      description: Request failed validation
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error:
+              code: VALIDATION_ERROR
+              message: Request validation failed
+              details: [{ path: priceCents, message: 'Too small: expected number to be >0' }]
+              correlationId: 1b2c3d4e
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, correlationId]
+          properties:
+            code: { type: string, example: OUT_OF_STOCK }
+            message: { type: string }
+            details: { nullable: true }
+            correlationId: { type: string }
+    Health:
+      type: object
+      properties:
+        status: { type: string, enum: [UP, DOWN] }
+        service: { type: string }
+        checks:
+          type: object
+          properties:
+            database: { type: string, enum: [UP, DOWN] }
+    SkinTag:
+      type: string
+      enum: [oily, dry, combination, normal, sensitive, all]
+    ProductInput:
+      type: object
+      required: [name, brand, category, priceCents, skinTypes, stock]
+      properties:
+        name: { type: string }
+        brand: { type: string }
+        category: { type: string, example: serum }
+        description: { type: string }
+        priceCents: { type: integer, minimum: 1, example: 1299 }
+        skinTypes:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/SkinTag' }
+        stock: { type: integer, minimum: 0 }
+    Product:
+      allOf:
+        - $ref: '#/components/schemas/ProductInput'
+        - type: object
+          properties:
+            id: { type: string, example: p-001 }
+            updatedAt: { type: string, format: date-time }
+    ReservationRequest:
+      type: object
+      required: [orderId, items]
+      properties:
+        orderId: { type: string }
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [productId, quantity]
+            properties:
+              productId: { type: string }
+              quantity: { type: integer, minimum: 1 }
+    Reservation:
+      type: object
+      properties:
+        orderId: { type: string }
+        status: { type: string, enum: [RESERVED, RELEASED] }
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              productId: { type: string }
+              name: { type: string }
+              quantity: { type: integer }
+              unitPriceCents: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
